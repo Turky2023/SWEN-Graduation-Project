@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Student Dashboard - Graduation Project Portal</title>
+    <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Student Dashboard</h1>
+            <div>
+                <span id="userInfo"></span>
+                <button class="secondary" onclick="logout()">Logout</button>
+            </div>
+        </div>
+
+        <div id="noGroupSection" class="section hidden">
+            <h2>You are not in any project group yet</h2>
+            <p>Please contact your supervisor to be added to a project group.</p>
+        </div>
+
+        <div id="groupSection" class="hidden">
+            <div class="section">
+                <h2>Group: <span id="groupName"></span></h2>
+                <p>Supervisor: <span id="supervisorName"></span></p>
+
+                <h3>Progress</h3>
+                <div class="progress-bar-container">
+                    <div class="progress-bar-fill" id="progressBar" style="width:0%">0%</div>
+                </div>
+            </div>
+
+            <div class="section">
+                <h3>Group Members</h3>
+                <table>
+                    <thead><tr><th>Name</th><th>Email</th><th>Student ID</th></tr></thead>
+                    <tbody id="membersTable"></tbody>
+                </table>
+            </div>
+
+            <div class="section">
+                <h3>Milestones &amp; Submissions</h3>
+                <div id="milestonesList"></div>
+            </div>
+
+            <div class="section">
+                <h3>Group Chat</h3>
+                <div id="chatBox" class="chat-box"></div>
+                <div class="chat-input-row">
+                    <input type="text" id="chatInput" placeholder="Type a message..." maxlength="2000">
+                    <button onclick="sendChatMessage(currentGroup.id, 'chatInput', 'chatBox', 'chatMsg')">Send</button>
+                </div>
+                <p id="chatMsg"></p>
+            </div>
+        </div>
+    </div>
+
+    <script src="/app.js">
+
+</script>
+    <script>
+
+        var currentGroup = null;
+        var milestones = [];
+        var submissions = [];
+
+        getCurrentUser().then(function(user) {
+            if (user.error) { window.location.href = '/'; return; }
+            if (user.role !== 'STUDENT') { window.location.href = '/supervisor.html'; return; }
+            document.getElementById('userInfo').textContent = user.name + ' (' + user.email + ')';
+            loadGroups();
+        }).catch(function() { window.location.href = '/'; });
+
+        function loadGroups() {
+            apiCall('/api/groups').then(function(groups) {
+                if (groups.length === 0) {
+                    document.getElementById('noGroupSection').classList.remove('hidden');
+                } else {
+                    currentGroup = groups[0];
+                    document.getElementById('groupSection').classList.remove('hidden');
+                    loadGroupDetails(currentGroup.id);
+                    startChatPolling(currentGroup.id, 'chatBox');
+                    document.getElementById('chatInput').addEventListener('keydown', function(e) {
+                        if (e.key === 'Enter') {
+                            sendChatMessage(currentGroup.id, 'chatInput', 'chatBox', 'chatMsg');
+                        }
+                    });
+                }
+            });
+        }
+
+        function loadGroupDetails(groupId) {
+            apiCall('/api/groups/' + groupId).then(function(group) {
+                document.getElementById('groupName').textContent = group.name;
+                document.getElementById('supervisorName').textContent = group.supervisorName || 'Not assigned';
+                var pct = group.progress || 0;
+                var bar = document.getElementById('progressBar');
+                bar.style.width = pct + '%';
+                bar.textContent = pct + '%';
+            });
+
+            apiCall('/api/groups/' + groupId + '/members').then(function(members) {
+                var tbody = document.getElementById('membersTable');
+                tbody.innerHTML = '';
+                members.forEach(function(m) {
+                    var tr = document.createElement('tr');
+                    tr.innerHTML = '<td>' + m.studentName + '</td><td>' + m.studentEmail +
+                                   '</td><td>' + (m.studentIdNumber || '-') + '</td>';
+                    tbody.appendChild(tr);
+                });
+            });
+
+            loadMilestones(groupId);
+        }
+
+        function loadMilestones(groupId) {
+            Promise.all([
+                apiCall('/api/milestones/group/' + groupId),
+                apiCall('/api/submissions/group/' + groupId)
+            ]).then(function(results) {
+                milestones = results[0];
+                submissions = results[1];
+                renderMilestones();
+            });
+        }
+
+        function renderMilestones() {
+            var container = document.getElementById('milestonesList');
+            container.innerHTML = '';
+
+            if (milestones.length === 0) {
+                container.innerHTML = '<p class="info-msg">No milestones set yet. Wait for your supervisor to create them.</p>';
+                return;
+            }
+
+            milestones.forEach(function(m) {
+                var sub = submissions.find(function(s) { return s.milestoneId === m.id; });
+                var passed = isDeadlinePassed(m.deadline);
+                var div = document.createElement('div');
+                div.style.cssText = 'border:1px solid #ddd;padding:10px;margin-bottom:10px;';
+
+                var html = '<h3>' + m.title + ' (' + m.type.replace(/_/g, ' ') + ')</h3>';
+                html += '<p>Deadline: ' + formatDate(m.deadline);
+                if (passed) html += ' <span style="color:#cc3333;">[PASSED]</span>';
+                html += '</p>';
+
+                if (m.hasTemplate) {
+                    html += '<p><a href="/api/milestones/' + m.id + '/template">Download Template: ' + (m.templateFileName || 'file') + '</a></p>';
+                }
+
+                if (sub) {
+                    html += '<p>Submitted: ' + sub.fileName + ' (' + formatDate(sub.uploadedAt) + ')</p>';
+                    html += '<p>Status: <span class="status status-' + sub.status + '">' + sub.status.replace(/_/g, ' ') + '</span></p>';
+
+                    if (sub.feedback) {
+                        html += '<div class="feedback-box">';
+                        html += '<p><strong>Supervisor Feedback:</strong></p>';
+                        html += '<p>Comment: ' + (sub.feedback.comment || '-') + '</p>';
+                        html += '<p>Grade: ' + (sub.feedback.grade != null ? sub.feedback.grade : '-') + '</p>';
+                        html += '<p class="info-msg">Left on: ' + formatDate(sub.feedback.createdAt) + '</p>';
+                        html += '</div>';
+                    }
+
+                    if (!passed) {
+                        html += '<button class="danger" onclick="deleteSubmission(' + sub.id + ')">Delete Submission</button>';
+                    }
+                }
+
+                if (!passed) {
+                    html += '<div><input type="file" id="file_' + m.id + '">';
+                    html += '<button onclick="uploadSubmission(' + m.id + ')">Upload</button></div>';
+                }
+
+                html += '<p id="milestoneMsg_' + m.id + '"></p>';
+                div.innerHTML = html;
+                container.appendChild(div);
+            });
+        }
+
+        function uploadSubmission(milestoneId) {
+            var msgId = 'milestoneMsg_' + milestoneId;
+            clearMessage(msgId);
+            var file = document.getElementById('file_' + milestoneId).files[0];
+            if (!file) { showError(msgId, 'Please select a file.'); return; }
+
+            var fd = new FormData();
+            fd.append('file', file);
+            fd.append('groupId', currentGroup.id);
+            fd.append('milestoneId', milestoneId);
+
+            apiCall('/api/submissions/upload', 'POST', fd, true).then(function(result) {
+                if (result.error) showError(msgId, result.error);
+                else { showSuccess(msgId, 'File uploaded!'); loadMilestones(currentGroup.id); }
+            });
+        }
+
+        function deleteSubmission(subId) {
+            if (!confirm('Are you sure you want to delete this submission?')) return;
+            apiCall('/api/submissions/' + subId, 'DELETE').then(function(result) {
+                if (result.error) alert(result.error);
+                else loadMilestones(currentGroup.id);
+            });
+        }
+</script>
+</body>
+</html>

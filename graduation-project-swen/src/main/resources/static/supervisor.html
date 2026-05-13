@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Supervisor Dashboard - Graduation Project Portal</title>
+    <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Supervisor Dashboard</h1>
+            <div>
+                <span id="userInfo"></span>
+                <button class="secondary" onclick="logout()">Logout</button>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>Create New Project Group</h2>
+            <label for="newGroupName">Project Name</label>
+            <input type="text" id="newGroupName">
+            <p id="createGroupMsg"></p>
+            <button onclick="createGroup()">Create Group</button>
+        </div>
+
+        <div class="section">
+            <h2>My Project Groups</h2>
+            <div id="groupsList">Loading...</div>
+        </div>
+
+        <div id="groupDetails" class="hidden">
+            <div class="section">
+                <h2>Group: <span id="selectedGroupName"></span></h2>
+                <p>Progress: <span id="groupProgress">0</span>%</p>
+                <div class="progress-bar-container">
+                    <div class="progress-bar-fill" id="progressBar" style="width:0%">0%</div>
+                </div>
+
+                <h3>Members</h3>
+                <table>
+                    <thead><tr><th>Name</th><th>Email</th><th>Student ID</th><th>Action</th></tr></thead>
+                    <tbody id="membersTable"></tbody>
+                </table>
+                <h3>Add Member</h3>
+                <input type="text" id="searchMemberInput" placeholder="Search by email or student ID">
+                <button onclick="searchMembers()">Search</button>
+                <div id="searchResults"></div>
+                <p id="addMemberMsg"></p>
+            </div>
+
+            <div class="section">
+                <h3>Create Milestone</h3>
+                <label for="milestoneTitle">Title</label>
+                <input type="text" id="milestoneTitle" placeholder="e.g. Project Proposal Submission">
+
+                <label for="milestoneType">Type</label>
+                <select id="milestoneType">
+                    <option value="PROJECT_PROPOSAL">Project Proposal</option>
+                    <option value="PROJECT_PLAN">Project Plan</option>
+                    <option value="PROJECT_DESIGN">Project Design</option>
+                    <option value="PROJECT_IMPLEMENTATION">Project Implementation</option>
+                    <option value="FINAL_REPORT">Final Report</option>
+                    <option value="FINAL_PRESENTATION">Final Presentation</option>
+                </select>
+
+                <label for="milestoneDeadline">Deadline</label>
+                <input type="datetime-local" id="milestoneDeadline">
+
+                <label for="milestoneFile">Milestone File (optional)</label>
+                <input type="file" id="milestoneFile">
+                <p class="info-msg">Upload the file students will need to view, download, and use for this milestone.</p>
+
+                <p id="createMilestoneMsg"></p>
+                <button onclick="createMilestone()">Create Milestone</button>
+            </div>
+
+            <div class="section">
+                <h3>Milestones</h3>
+                <div id="milestonesList"></div>
+            </div>
+
+            <div class="section">
+                <h3>Submissions &amp; Review</h3>
+                <div id="submissionsList"></div>
+            </div>
+
+            <div class="section">
+                <h3>Group Chat</h3>
+                <div id="chatBox" class="chat-box"></div>
+                <div class="chat-input-row">
+                    <input type="text" id="chatInput" placeholder="Type a message..." maxlength="2000">
+                    <button onclick="sendChatMessage(selectedGroupId, 'chatInput', 'chatBox', 'chatMsg')">Send</button>
+                </div>
+                <p id="chatMsg"></p>
+            </div>
+        </div>
+    </div>
+
+    <script src="/app.js">
+
+</script>
+    <script>
+
+        var selectedGroupId = null;
+
+        getCurrentUser().then(function(user) {
+            if (user.error) { window.location.href = '/'; return; }
+            if (user.role !== 'SUPERVISOR') { window.location.href = '/student.html'; return; }
+            document.getElementById('userInfo').textContent = user.name + ' (' + user.email + ')';
+            loadGroups();
+        }).catch(function() { window.location.href = '/'; });
+
+        function loadGroups() {
+            apiCall('/api/groups').then(function(groups) {
+                var div = document.getElementById('groupsList');
+                if (groups.length === 0) {
+                    div.innerHTML = '<p class="info-msg">No groups yet. Create one above.</p>';
+                    return;
+                }
+                var html = '<table><thead><tr><th>Group Name</th><th>Action</th></tr></thead><tbody>';
+                groups.forEach(function(g) {
+                    html += '<tr><td>' + g.name + '</td><td><button onclick="selectGroup(' + g.id + ')">Manage</button></td></tr>';
+                });
+                div.innerHTML = html + '</tbody></table>';
+            });
+        }
+
+        function createGroup() {
+            clearMessage('createGroupMsg');
+            var name = document.getElementById('newGroupName').value.trim();
+            if (!name) { showError('createGroupMsg', 'Please enter a group name.'); return; }
+
+            apiCall('/api/groups', 'POST', { name: name }).then(function(result) {
+                if (result.error) showError('createGroupMsg', result.error);
+                else {
+                    showSuccess('createGroupMsg', 'Group created!');
+                    document.getElementById('newGroupName').value = '';
+                    loadGroups();
+                }
+            });
+        }
+
+        function selectGroup(groupId) {
+
+            if (selectedGroupId && selectedGroupId !== groupId) {
+                stopChatPolling(selectedGroupId);
+            }
+            selectedGroupId = groupId;
+            document.getElementById('groupDetails').classList.remove('hidden');
+            loadGroupDetails(groupId);
+            loadMilestones(groupId);
+            loadSubmissions(groupId);
+            startChatPolling(groupId, 'chatBox');
+
+            var input = document.getElementById('chatInput');
+            if (!input.dataset.bound) {
+                input.dataset.bound = 'true';
+                input.addEventListener('keydown', function(e) {
+                    if (e.key === 'Enter') {
+                        sendChatMessage(selectedGroupId, 'chatInput', 'chatBox', 'chatMsg');
+                    }
+                });
+            }
+        }
+
+        function loadGroupDetails(groupId) {
+            apiCall('/api/groups/' + groupId).then(function(group) {
+                document.getElementById('selectedGroupName').textContent = group.name;
+                var pct = group.progress || 0;
+                document.getElementById('groupProgress').textContent = pct;
+                var bar = document.getElementById('progressBar');
+                bar.style.width = pct + '%';
+                bar.textContent = pct + '%';
+            });
+
+            apiCall('/api/groups/' + groupId + '/members').then(function(members) {
+                var tbody = document.getElementById('membersTable');
+                tbody.innerHTML = '';
+                members.forEach(function(m) {
+                    var tr = document.createElement('tr');
+                    tr.innerHTML = '<td>' + m.studentName + '</td><td>' + m.studentEmail +
+                                   '</td><td>' + (m.studentIdNumber || '-') +
+                                   '</td><td><button class="danger" onclick="removeMember(' + groupId + ',' + m.id + ')">Remove</button></td>';
+                    tbody.appendChild(tr);
+                });
+            });
+        }
+
+        function searchMembers() {
+            var query = document.getElementById('searchMemberInput').value.trim();
+            if (!query) return;
+            apiCall('/api/auth/search?query=' + encodeURIComponent(query)).then(function(results) {
+                var div = document.getElementById('searchResults');
+                if (results.length === 0) {
+                    div.innerHTML = '<p class="info-msg">No students found.</p>';
+                    return;
+                }
+                div.innerHTML = '';
+                results.forEach(function(u) {
+                    var p = document.createElement('p');
+                    p.innerHTML = u.name + ' (' + u.email + ', ID: ' + (u.studentId || '-') + ') ' +
+                        '<button onclick="addMember(' + u.id + ')">Add</button>';
+                    div.appendChild(p);
+                });
+            });
+        }
+
+        function addMember(studentId) {
+            clearMessage('addMemberMsg');
+            apiCall('/api/groups/' + selectedGroupId + '/members', 'POST', { studentId: studentId }).then(function(result) {
+                if (result.error) showError('addMemberMsg', result.error);
+                else {
+                    showSuccess('addMemberMsg', 'Member added!');
+                    document.getElementById('searchResults').innerHTML = '';
+                    loadGroupDetails(selectedGroupId);
+                }
+            });
+        }
+
+        function removeMember(groupId, memberId) {
+            if (!confirm('Remove this member?')) return;
+            apiCall('/api/groups/' + groupId + '/members/' + memberId, 'DELETE').then(function(result) {
+                if (result.error) alert(result.error);
+                else loadGroupDetails(groupId);
+            });
+        }
+
+        function createMilestone() {
+            clearMessage('createMilestoneMsg');
+            var data = {
+                title: document.getElementById('milestoneTitle').value.trim(),
+                type: document.getElementById('milestoneType').value,
+                deadline: document.getElementById('milestoneDeadline').value,
+                groupId: selectedGroupId
+            };
+            if (!data.title || !data.deadline) {
+                showError('createMilestoneMsg', 'Please fill in title and deadline.');
+                return;
+            }
+
+            var fileInput = document.getElementById('milestoneFile');
+            var hasFile = fileInput.files && fileInput.files[0];
+
+            apiCall('/api/milestones', 'POST', data).then(function(result) {
+                if (result.error) { showError('createMilestoneMsg', result.error); return; }
+
+                if (hasFile) {
+                    var fd = new FormData();
+                    fd.append('file', fileInput.files[0]);
+                    apiCall('/api/milestones/' + result.id + '/template', 'POST', fd, true).then(function(r) {
+                        if (r.error) showError('createMilestoneMsg', 'Milestone created but file upload failed: ' + r.error);
+                        else showSuccess('createMilestoneMsg', 'Milestone and file created!');
+                        clearMilestoneForm();
+                        loadMilestones(selectedGroupId);
+                    });
+                } else {
+                    showSuccess('createMilestoneMsg', 'Milestone created!');
+                    clearMilestoneForm();
+                    loadMilestones(selectedGroupId);
+                }
+            });
+        }
+
+        function clearMilestoneForm() {
+            document.getElementById('milestoneTitle').value = '';
+            document.getElementById('milestoneDeadline').value = '';
+            document.getElementById('milestoneFile').value = '';
+        }
+
+        function loadMilestones(groupId) {
+            apiCall('/api/milestones/group/' + groupId).then(function(milestones) {
+                var div = document.getElementById('milestonesList');
+                div.innerHTML = '';
+                if (milestones.length === 0) {
+                    div.innerHTML = '<p class="info-msg">No milestones yet.</p>';
+                    return;
+                }
+
+                milestones.forEach(function(m) {
+                    var passed = isDeadlinePassed(m.deadline);
+                    var mDiv = document.createElement('div');
+                    mDiv.style.cssText = 'border:1px solid #ddd;padding:10px;margin-bottom:8px;';
+
+                    var html = '<strong>' + m.title + '</strong> (' + m.type.replace(/_/g, ' ') + ')';
+                    html += '<br>Deadline: ' + formatDate(m.deadline);
+                    if (passed) html += ' <span style="color:#cc3333;">[PASSED]</span>';
+
+                    if (m.hasTemplate) {
+                        html += '<br><a href="/api/milestones/' + m.id + '/template">Download Template: ' + (m.templateFileName || 'file') + '</a>';
+                    }
+
+                    html += '<div><input type="file" id="template_' + m.id + '">';
+                    html += '<button onclick="uploadTemplate(' + m.id + ')">Upload Template</button>';
+                    html += '<button class="danger" onclick="deleteMilestone(' + m.id + ')">Delete Milestone</button></div>';
+                    html += '<p id="templateMsg_' + m.id + '"></p>';
+
+                    mDiv.innerHTML = html;
+                    div.appendChild(mDiv);
+                });
+            });
+        }
+
+        function uploadTemplate(milestoneId) {
+            var msgId = 'templateMsg_' + milestoneId;
+            clearMessage(msgId);
+            var file = document.getElementById('template_' + milestoneId).files[0];
+            if (!file) { showError(msgId, 'Please select a file.'); return; }
+
+            var fd = new FormData();
+            fd.append('file', file);
+            apiCall('/api/milestones/' + milestoneId + '/template', 'POST', fd, true).then(function(result) {
+                if (result.error) showError(msgId, result.error);
+                else { showSuccess(msgId, 'Template uploaded!'); loadMilestones(selectedGroupId); }
+            });
+        }
+
+        function deleteMilestone(milestoneId) {
+            if (!confirm('Delete this milestone? Any submissions for it will also be removed.')) return;
+            apiCall('/api/milestones/' + milestoneId, 'DELETE').then(function(result) {
+                if (result.error) alert(result.error);
+                else {
+                    loadMilestones(selectedGroupId);
+                    loadSubmissions(selectedGroupId);
+                    loadGroupDetails(selectedGroupId);
+                }
+            });
+        }
+
+        function loadSubmissions(groupId) {
+            apiCall('/api/submissions/group/' + groupId).then(function(subs) {
+                var div = document.getElementById('submissionsList');
+                div.innerHTML = '';
+                if (subs.length === 0) {
+                    div.innerHTML = '<p class="info-msg">No submissions yet from this group.</p>';
+                    return;
+                }
+
+                subs.forEach(function(s) {
+                    var sDiv = document.createElement('div');
+                    sDiv.style.cssText = 'border:1px solid #ddd;padding:10px;margin-bottom:10px;';
+
+                    var html = '<strong>' + s.milestoneTitle + '</strong> (' + s.milestoneType.replace(/_/g, ' ') + ')';
+                    html += '<br>File: <a href="/api/submissions/' + s.id + '/download">' + s.fileName + '</a>';
+                    html += '<br>Uploaded: ' + formatDate(s.uploadedAt);
+                    html += '<br>Status: <span class="status status-' + s.status + '">' + s.status.replace(/_/g, ' ') + '</span>';
+
+                    if (s.feedback) {
+                        html += '<div class="feedback-box">';
+                        html += '<p>Previous Feedback: ' + (s.feedback.comment || '-') + '</p>';
+                        html += '<p>Grade: ' + (s.feedback.grade != null ? s.feedback.grade : '-') + '</p>';
+                        html += '</div>';
+                    }
+
+                    var statuses = ['PENDING', 'UNDER_REVIEW', 'ACCEPTED', 'REJECTED', 'NEEDS_REVISION'];
+                    html += '<div style="margin-top:8px;background:#f9f9f9;padding:8px;border:1px solid #eee;">';
+                    html += '<label>Status</label><select id="fbStatus_' + s.id + '">';
+                    statuses.forEach(function(st) {
+                        html += '<option value="' + st + '"' + (s.status === st ? ' selected' : '') + '>' + st.replace(/_/g, ' ') + '</option>';
+                    });
+                    html += '</select>';
+                    html += '<label>Comment</label>';
+                    html += '<textarea id="fbComment_' + s.id + '">' + (s.feedback ? (s.feedback.comment || '') : '') + '</textarea>';
+                    html += '<label>Grade</label>';
+                    html += '<input type="text" id="fbGrade_' + s.id + '" value="' + (s.feedback && s.feedback.grade != null ? s.feedback.grade : '') + '" placeholder="e.g. 85">';
+                    html += '<button onclick="submitFeedback(' + s.id + ')">Save Feedback</button>';
+                    html += '<p id="fbMsg_' + s.id + '"></p></div>';
+
+                    sDiv.innerHTML = html;
+                    div.appendChild(sDiv);
+                });
+            });
+        }
+
+        function submitFeedback(subId) {
+            var msgId = 'fbMsg_' + subId;
+            clearMessage(msgId);
+            var gradeStr = document.getElementById('fbGrade_' + subId).value.trim();
+            var data = {
+                status: document.getElementById('fbStatus_' + subId).value,
+                comment: document.getElementById('fbComment_' + subId).value.trim(),
+                grade: gradeStr ? parseInt(gradeStr) : null
+            };
+
+            apiCall('/api/submissions/' + subId + '/feedback', 'POST', data).then(function(result) {
+                if (result.error) showError(msgId, result.error);
+                else { showSuccess(msgId, 'Feedback saved!'); loadSubmissions(selectedGroupId); }
+            });
+        }
+</script>
+</body>
+</html>

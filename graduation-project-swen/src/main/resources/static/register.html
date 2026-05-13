@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Register - Graduation Project Portal</title>
+    <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+    <div class="container">
+        <h1>Register New Account</h1>
+
+        <label for="name">Full Name</label>
+        <input type="text" id="name" placeholder="Your full name">
+
+        <label for="email">Email</label>
+        <input type="email" id="email" placeholder="your.email@example.com">
+
+        <label for="password">Password</label>
+        <input type="password" id="password" placeholder="Min 8 chars, 1 uppercase, 1 number">
+
+        <label for="role">Role</label>
+        <select id="role">
+            <option value="STUDENT">Student</option>
+            <option value="SUPERVISOR">Supervisor</option>
+        </select>
+
+        <div id="studentIdSection">
+            <label for="studentId">Student ID</label>
+            <input type="text" id="studentId" placeholder="e.g. 2230003747">
+        </div>
+
+        <p id="msg"></p>
+
+        <button onclick="register()">Register</button>
+        <button class="secondary" onclick="window.location.href='/'">Back to Home</button>
+    </div>
+
+    <script src="/app.js">
+
+</script>
+    <script>
+
+        document.getElementById('role').addEventListener('change', function() {
+            var section = document.getElementById('studentIdSection');
+            section.style.display = this.value === 'STUDENT' ? 'block' : 'none';
+        });
+
+        function register() {
+            clearMessage('msg');
+            var data = {
+                name: document.getElementById('name').value.trim(),
+                email: document.getElementById('email').value.trim(),
+                password: document.getElementById('password').value,
+                role: document.getElementById('role').value,
+                studentId: document.getElementById('studentId').value.trim() || null
+            };
+
+            if (!data.name || !data.email || !data.password) {
+                showError('msg', 'Please fill in all required fields.');
+                return;
+            }
+
+            fetch('/api/auth/register', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data)
+            }).then(function(r) { return r.json(); })
+            .then(function(result) {
+                if (result.error) {
+                    showError('msg', result.error);
+                } else {
+                    showSuccess('msg', 'Registration successful! Redirecting to home page...');
+                    setTimeout(function() {
+                        window.location.href = '/';
+                    }, 1500);
+                }
+            }).catch(function(err) {
+                showError('msg', 'Registration failed. Please try again.');
+            });
+        }
+</script>
+</body>
+</html>
